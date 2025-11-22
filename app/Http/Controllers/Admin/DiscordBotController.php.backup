@@ -1,0 +1,606 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+
+class DiscordBotController extends Controller
+{
+    /**
+     * Get guild ID from config or fetch from bot
+     */
+    private function getGuildId()
+    {
+        $guildId = config('services.discord.guild_id');
+        
+        // If not configured, fetch from bot API
+        if (!$guildId) {
+            try {
+                $response = \Http::get('http://localhost:3001/users');
+                if ($response->successful()) {
+                    $users = $response->json('users') ?? [];
+                    if (!empty($users)) {
+                        // Extract guild_id from first user's data if available
+                        // Or we can add a dedicated endpoint to get guild info
+                        // For now, let's use the roles endpoint which includes guild info
+                        $rolesResponse = \Http::get('http://localhost:3001/roles');
+                        if ($rolesResponse->successful()) {
+                            $roles = $rolesResponse->json('roles') ?? [];
+                            if (!empty($roles)) {
+                                $guildId = $roles[0]['guild_id'] ?? null;
+                            }
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                \Log::error('Failed to fetch guild_id: ' . $e->getMessage());
+            }
+        }
+        
+        return $guildId;
+    }
+    
+    public function showSendMessageForm()
+    {
+        // Ambil daftar channel dari bot Discord
+        $channels = [];
+        try {
+            $response = Http::get('http://localhost:3001/channels');
+            if ($response->successful()) {
+                $channels = $response->json('channels') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan channels kosong
+        }
+        return view('admin.send-discord-message', compact('channels'));
+    }
+
+    public function sendMessage(Request $request)
+    {
+        $request->validate([
+            'channel_id' => 'required|string',
+            'message' => 'required|string',
+        ]);
+
+        // Kirim ke endpoint bot Node.js (misal: http://localhost:3001/send-message)
+        $response = Http::post('http://localhost:3001/send-message', [
+            'channel_id' => $request->channel_id,
+            'message' => $request->message,
+        ]);
+
+        if ($response->successful()) {
+            return back()->with('success', 'Pesan berhasil dikirim ke Discord!');
+        } else {
+            return back()->with('error', 'Gagal mengirim pesan ke Discord.');
+        }
+    }
+
+    // FORM DM
+    public function showSendDmForm()
+    {
+        // Ambil daftar user dari bot Discord
+        $users = [];
+        try {
+            $response = Http::get('http://localhost:3001/users');
+            if ($response->successful()) {
+                $users = $response->json('users') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan users kosong
+        }
+        return view('admin.send-discord-dm', compact('users'));
+    }
+    public function sendDm(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'message' => 'required|string',
+        ]);
+        $response = Http::post('http://localhost:3001/send-dm', [
+            'user_id' => $request->user_id,
+            'message' => $request->message,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'DM berhasil dikirim!')
+            : back()->with('error', 'Gagal mengirim DM.');
+    }
+
+    // FORM KICK
+    public function showKickForm()
+    {
+        // Ambil daftar user dari bot Discord
+        $users = [];
+        try {
+            $response = \Http::get('http://localhost:3001/users');
+            if ($response->successful()) {
+                $users = $response->json('users') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan users kosong
+        }
+        return view('admin.kick-discord-user', compact('users'));
+    }
+    public function kickUser(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'reason' => 'nullable|string',
+        ]);
+        $response = Http::post('http://localhost:3001/kick', [
+            'guild_id' => $this->getGuildId(),
+            'user_id' => $request->user_id,
+            'reason' => $request->reason,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'User berhasil di-kick!')
+            : back()->with('error', 'Gagal kick user: ' . $response->body());
+    }
+
+    // FORM BAN
+    public function showBanForm()
+    {
+        // Ambil daftar user dari bot Discord
+        $users = [];
+        try {
+            $response = \Http::get('http://localhost:3001/users');
+            if ($response->successful()) {
+                $users = $response->json('users') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan users kosong
+        }
+        return view('admin.ban-discord-user', compact('users'));
+    }
+    public function banUser(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'reason' => 'nullable|string',
+        ]);
+        $response = Http::post('http://localhost:3001/ban', [
+            'guild_id' => $this->getGuildId(),
+            'user_id' => $request->user_id,
+            'reason' => $request->reason,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'User berhasil di-ban!')
+            : back()->with('error', 'Gagal ban user: ' . $response->body());
+    }
+
+    // FORM ASSIGN ROLE
+    public function showAssignRoleForm()
+    {
+        // Ambil daftar user dan role dari bot Discord
+        $users = [];
+        $roles = [];
+        try {
+            $userRes = \Http::get('http://localhost:3001/users');
+            if ($userRes->successful()) {
+                $users = $userRes->json('users') ?? [];
+            }
+            $roleRes = \Http::get('http://localhost:3001/roles');
+            if ($roleRes->successful()) {
+                $roles = $roleRes->json('roles') ?? [];
+            }
+        } catch (\Exception $e) {}
+        return view('admin.assign-discord-role', compact('users', 'roles'));
+    }
+    public function assignRole(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'role_id' => 'required|string',
+        ]);
+        
+        $guildId = $this->getGuildId();
+        \Log::info('Assign Role Request', [
+            'guild_id' => $guildId,
+            'user_id' => $request->user_id,
+            'role_id' => $request->role_id
+        ]);
+        
+        $response = Http::post('http://localhost:3001/assign-role', [
+            'guild_id' => $guildId,
+            'user_id' => $request->user_id,
+            'role_id' => $request->role_id,
+        ]);
+        
+        \Log::info('Assign Role Response', [
+            'status' => $response->status(),
+            'body' => $response->body()
+        ]);
+        
+        return $response->successful()
+            ? back()->with('success', 'Role berhasil diberikan!')
+            : back()->with('error', 'Gagal assign role: ' . $response->body());
+    }
+
+    // FORM REMOVE ROLE
+    public function showRemoveRoleForm()
+    {
+        // Ambil daftar user dan role dari bot Discord
+        $users = [];
+        $roles = [];
+        try {
+            $userRes = \Http::get('http://localhost:3001/users');
+            if ($userRes->successful()) {
+                $users = $userRes->json('users') ?? [];
+            }
+            $roleRes = \Http::get('http://localhost:3001/roles');
+            if ($roleRes->successful()) {
+                $roles = $roleRes->json('roles') ?? [];
+            }
+        } catch (\Exception $e) {}
+        return view('admin.remove-discord-role', compact('users', 'roles'));
+    }
+    public function removeRole(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'role_id' => 'required|string',
+        ]);
+        $response = Http::post('http://localhost:3001/remove-role', [
+            'guild_id' => $this->getGuildId(),
+            'user_id' => $request->user_id,
+            'role_id' => $request->role_id,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'Role berhasil dihapus!')
+            : back()->with('error', 'Gagal remove role: ' . $response->body());
+    }
+
+    // STATUS BOT
+    public function botStatus()
+    {
+        try {
+            $response = Http::get('http://localhost:3001/status');
+            if ($response->successful()) {
+                $data = $response->json();
+                return view('admin.bot-status', ['status' => $data]);
+            } else {
+                return view('admin.bot-status', ['status' => ['online' => false]]);
+            }
+        } catch (\Exception $e) {
+            return view('admin.bot-status', ['status' => ['online' => false]]);
+        }
+    }
+    
+    // ==================== VOICE CHANNEL CONTROL ====================
+    
+    // FORM VOICE CONTROL
+    public function showVoiceForm()
+    {
+        $channels = [];
+        try {
+            $response = Http::get('http://localhost:3001/voice/channels');
+            if ($response->successful()) {
+                $channels = $response->json('channels') ?? [];
+            }
+        } catch (\Exception $e) {
+        }
+        
+        $voiceStatus = null;
+        try {
+            $response = Http::get('http://localhost:3001/voice/status');
+            if ($response->successful()) {
+                $voiceStatus = $response->json();
+            }
+        } catch (\Exception $e) {
+        }
+        
+        return view('admin.voice-control', compact('channels', 'voiceStatus'));
+    }
+    
+    // JOIN VOICE CHANNEL
+    public function joinVoice(Request $request)
+    {
+        $request->validate([
+            'channel_id' => 'required|string',
+        ]);
+        
+        $response = Http::post('http://localhost:3001/voice/join', [
+            'guild_id' => $this->getGuildId(),
+            'channel_id' => $request->channel_id,
+        ]);
+        
+        return $response->successful()
+            ? back()->with('success', 'Bot berhasil join voice channel!')
+            : back()->with('error', 'Gagal join voice: ' . $response->body());
+    }
+    
+    // LEAVE VOICE CHANNEL
+    public function leaveVoice()
+    {
+        $response = Http::post('http://localhost:3001/voice/leave');
+        
+        return $response->successful()
+            ? back()->with('success', 'Bot berhasil leave voice channel!')
+            : back()->with('error', 'Gagal leave voice: ' . $response->body());
+    }
+    
+    // GET VOICE STATUS (AJAX)
+    public function voiceStatus()
+    {
+        try {
+            $response = Http::get('http://localhost:3001/voice/status');
+            return response()->json($response->json());
+        } catch (\Exception $e) {
+            return response()->json(['connected' => false, 'error' => $e->getMessage()]);
+        }
+    }
+}
+    {
+        $request->validate([
+            'channel_id' => 'required|string',
+            'message' => 'required|string',
+        ]);
+
+        // Kirim ke endpoint bot Node.js (misal: http://localhost:3001/send-message)
+        $response = Http::post('http://localhost:3001/send-message', [
+            'channel_id' => $request->channel_id,
+            'message' => $request->message,
+        ]);
+
+        if ($response->successful()) {
+            return back()->with('success', 'Pesan berhasil dikirim ke Discord!');
+        } else {
+            return back()->with('error', 'Gagal mengirim pesan ke Discord.');
+        }
+    }
+
+    // FORM DM
+    public function showSendDmForm()
+    {
+        // Ambil daftar user dari bot Discord
+        $users = [];
+        try {
+            $response = Http::get('http://localhost:3001/users');
+            if ($response->successful()) {
+                $users = $response->json('users') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan users kosong
+        }
+        return view('admin.send-discord-dm', compact('users'));
+    }
+    public function sendDm(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'message' => 'required|string',
+        ]);
+        $response = Http::post('http://localhost:3001/send-dm', [
+            'user_id' => $request->user_id,
+            'message' => $request->message,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'DM berhasil dikirim!')
+            : back()->with('error', 'Gagal mengirim DM.');
+    }
+
+    // FORM KICK
+    public function showKickForm()
+    {
+        // Ambil daftar user dari bot Discord
+        $users = [];
+        try {
+            $response = \Http::get('http://localhost:3001/users');
+            if ($response->successful()) {
+                $users = $response->json('users') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan users kosong
+        }
+        return view('admin.kick-discord-user', compact('users'));
+    }
+    public function kickUser(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'reason' => 'nullable|string',
+        ]);
+        $response = Http::post('http://localhost:3001/kick', [
+            'guild_id' => $this->getGuildId(),
+            'user_id' => $request->user_id,
+            'reason' => $request->reason,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'User berhasil di-kick!')
+            : back()->with('error', 'Gagal kick user: ' . $response->body());
+    }
+
+    // FORM BAN
+    public function showBanForm()
+    {
+        // Ambil daftar user dari bot Discord
+        $users = [];
+        try {
+            $response = \Http::get('http://localhost:3001/users');
+            if ($response->successful()) {
+                $users = $response->json('users') ?? [];
+            }
+        } catch (\Exception $e) {
+            // Jika gagal, biarkan users kosong
+        }
+        return view('admin.ban-discord-user', compact('users'));
+    }
+    public function banUser(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'reason' => 'nullable|string',
+        ]);
+        $response = Http::post('http://localhost:3001/ban', [
+            'guild_id' => $this->getGuildId(),
+            'user_id' => $request->user_id,
+            'reason' => $request->reason,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'User berhasil di-ban!')
+            : back()->with('error', 'Gagal ban user: ' . $response->body());
+    }
+
+    // FORM ASSIGN ROLE
+    public function showAssignRoleForm()
+    {
+        // Ambil daftar user dan role dari bot Discord
+        $users = [];
+        $roles = [];
+        try {
+            $userRes = \Http::get('http://localhost:3001/users');
+            if ($userRes->successful()) {
+                $users = $userRes->json('users') ?? [];
+            }
+            $roleRes = \Http::get('http://localhost:3001/roles');
+            if ($roleRes->successful()) {
+                $roles = $roleRes->json('roles') ?? [];
+            }
+        } catch (\Exception $e) {}
+        return view('admin.assign-discord-role', compact('users', 'roles'));
+    }
+    public function assignRole(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'role_id' => 'required|string',
+        ]);
+        
+        $guildId = $this->getGuildId();
+        \Log::info('Assign Role Request', [
+            'guild_id' => $guildId,
+            'user_id' => $request->user_id,
+            'role_id' => $request->role_id
+        ]);
+        
+        $response = Http::post('http://localhost:3001/assign-role', [
+            'guild_id' => $guildId,
+            'user_id' => $request->user_id,
+            'role_id' => $request->role_id,
+        ]);
+        
+        \Log::info('Assign Role Response', [
+            'status' => $response->status(),
+            'body' => $response->body()
+        ]);
+        
+        return $response->successful()
+            ? back()->with('success', 'Role berhasil diberikan!')
+            : back()->with('error', 'Gagal assign role: ' . $response->body());
+    }
+
+    // FORM REMOVE ROLE
+    public function showRemoveRoleForm()
+    {
+        // Ambil daftar user dan role dari bot Discord
+        $users = [];
+        $roles = [];
+        try {
+            $userRes = \Http::get('http://localhost:3001/users');
+            if ($userRes->successful()) {
+                $users = $userRes->json('users') ?? [];
+            }
+            $roleRes = \Http::get('http://localhost:3001/roles');
+            if ($roleRes->successful()) {
+                $roles = $roleRes->json('roles') ?? [];
+            }
+        } catch (\Exception $e) {}
+        return view('admin.remove-discord-role', compact('users', 'roles'));
+    }
+    public function removeRole(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|string',
+            'role_id' => 'required|string',
+        ]);
+        $response = Http::post('http://localhost:3001/remove-role', [
+            'guild_id' => $this->getGuildId(),
+            'user_id' => $request->user_id,
+            'role_id' => $request->role_id,
+        ]);
+        return $response->successful()
+            ? back()->with('success', 'Role berhasil dihapus!')
+            : back()->with('error', 'Gagal remove role: ' . $response->body());
+    }
+
+    // STATUS BOT
+    public function botStatus()
+    {
+        try {
+            $response = Http::get('http://localhost:3001/status');
+            $status = $response->successful() ? $response->json() : null;
+            return view('admin.bot-status', compact('status'));
+        } catch (\Exception $e) {
+            return view('admin.bot-status', ['status' => null, 'error' => $e->getMessage()]);
+        }
+    }
+    
+    // ==================== VOICE CHANNEL CONTROL ====================
+    
+    // FORM VOICE CONTROL
+    public function showVoiceForm()
+    {
+        // Get list of voice channels
+        $channels = [];
+        try {
+            $response = Http::get('http://localhost:3001/voice/channels');
+            if ($response->successful()) {
+                $channels = $response->json('channels') ?? [];
+            }
+        } catch (\Exception $e) {
+            // If failed, channels will be empty
+        }
+        
+        // Get current voice status
+        $voiceStatus = null;
+        try {
+            $response = Http::get('http://localhost:3001/voice/status');
+            if ($response->successful()) {
+                $voiceStatus = $response->json();
+            }
+        } catch (\Exception $e) {
+            // If failed, status will be null
+        }
+        
+        return view('admin.voice-control', compact('channels', 'voiceStatus'));
+    }
+    
+    // JOIN VOICE CHANNEL
+    public function joinVoice(Request $request)
+    {
+        $request->validate([
+            'channel_id' => 'required|string',
+        ]);
+        
+        $response = Http::post('http://localhost:3001/voice/join', [
+            'guild_id' => $this->getGuildId(),
+            'channel_id' => $request->channel_id,
+        ]);
+        
+        return $response->successful()
+            ? back()->with('success', 'Bot berhasil join voice channel!')
+            : back()->with('error', 'Gagal join voice: ' . $response->body());
+    }
+    
+    // LEAVE VOICE CHANNEL
+    public function leaveVoice()
+    {
+        $response = Http::post('http://localhost:3001/voice/leave');
+        
+        return $response->successful()
+            ? back()->with('success', 'Bot berhasil leave voice channel!')
+            : back()->with('error', 'Gagal leave voice: ' . $response->body());
+    }
+    
+    // GET VOICE STATUS (AJAX)
+    public function voiceStatus()
+    {
+        try {
+            $response = Http::get('http://localhost:3001/voice/status');
+            return response()->json($response->json());
+        } catch (\Exception $e) {
+            return response()->json(['connected' => false, 'error' => $e->getMessage()]);
+        }
+    }
+}
